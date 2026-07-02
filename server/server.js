@@ -50,11 +50,8 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${safe}`);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 1024 * 1024 * 1024 } }); // 1GB
+const upload = multer({ storage, limits: { fileSize: 1024 * 1024 * 1024 } }); 
 
-// Single source of truth for "what does a session's analytics payload look
-// like" — used both by GET /api/analytics/:code and by the webhook sender
-// below, so the two can never silently drift apart.
 function buildAnalyticsPayload(roomCode) {
   const history = getRoomHistory(roomCode);
   if (!history) return null;
@@ -98,9 +95,7 @@ app.get("/api/analytics/:code", (req, res) => {
   res.json(payload);
 });
 
-// Manual re-send: useful if the automatic webhook failed both attempts
-// (e.g. the other team's endpoint was briefly down). Works even after the
-// room has closed, since everything needed lives in SQLite.
+
 app.post("/api/analytics/:code/resend", async (req, res) => {
   const code = req.params.code.toUpperCase();
   if (!ANALYTICS_WEBHOOK_URL) {
@@ -134,12 +129,8 @@ function broadcastChat(roomCode, message) {
   io.to(roomCode).emit("chat:message", message);
 }
 
-// Sends the full session dataset to an external analytics endpoint, if one is
-// configured. Deliberately NOT awaited by leaveCurrentRoom: cleanup (closing
-// the room, freeing the socket) must never wait on a third-party server that
-// could be slow, down, or unreachable. Configure via environment variables —
-// see README.md ("Export vers une autre équipe").
-const ANALYTICS_WEBHOOK_URL = "http://172.16.1.103:5174";
+
+const ANALYTICS_WEBHOOK_URL = process.env.ANALYTICS_WEBHOOK_URL ?? "http://172.16.1.103:5174";
 const ANALYTICS_WEBHOOK_SECRET = null;
 
 async function postOnce(payload) {
@@ -150,22 +141,17 @@ async function postOnce(payload) {
       ...(ANALYTICS_WEBHOOK_SECRET ? { "X-Webhook-Secret": ANALYTICS_WEBHOOK_SECRET } : {}),
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(8000), // don't hang forever on a dead endpoint
+    signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 async function sendAnalyticsWebhook(roomCode) {
-  if (!ANALYTICS_WEBHOOK_URL) return; // not configured: no-op, not an error
+  if (!ANALYTICS_WEBHOOK_URL) return;
 
   const payload = buildAnalyticsPayload(roomCode);
   if (!payload) return;
 
-  // One retry after a short delay: covers a transient blip (the other
-  // team's server restarting, a momentary network hiccup) without turning
-  // this into a full retry queue, which would be overkill here — the data
-  // is never lost either way since it's already durable in SQLite and
-  // re-fetchable via GET /api/analytics/:code.
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       await postOnce(payload);
@@ -193,10 +179,9 @@ async function leaveCurrentRoom(socket) {
   recordParticipantLeft(roomCode, socket.id);
 
   if (wasPresenter) {
-    // Source of truth just left: close the session for everyone left behind.
     io.to(roomCode).emit("room:closed", { reason: "Le présentateur a quitté la salle." });
     recordRoomClosed(roomCode);
-    sendAnalyticsWebhook(roomCode); // fire-and-forget, see comment above
+    sendAnalyticsWebhook(roomCode);
     deleteRoom(roomCode);
   } else {
     broadcastParticipants(roomCode);
@@ -248,13 +233,12 @@ io.on("connection", (socket) => {
     io.to(room.code).emit("chat:system", { text: `${name || "Un invité"} a rejoint la salle.` });
   });
 
-  // ---- presenter authority --------------------------------------------
-  // Single source of truth for playback. Never accepted from a non-presenter socket.
+
   socket.on("presenter:command", (cmd = {}) => {
     const room = getRoom(socket.data.roomCode);
-    if (!room || room.presenterId !== socket.id) return; // not the presenter: ignored
+    if (!room || room.presenterId !== socket.id) return;
     const seq = applyPresenterCommand(room, cmd);
-    recordEvent(room.code, socket.id, cmd.type, room.position); // logged with the new, applied position
+    recordEvent(room.code, socket.id, cmd.type, room.position); 
     socket.to(room.code).emit("sync:command", {
       type: cmd.type,
       position: room.position,
@@ -288,7 +272,7 @@ io.on("connection", (socket) => {
     broadcastParticipants(room.code);
   });
 
-  // ---- chat & reactions (bonus) -------------------------------------------
+
   socket.on("chat:message", ({ text } = {}) => {
     const room = getRoom(socket.data.roomCode);
     if (!room || !text?.trim()) return;
